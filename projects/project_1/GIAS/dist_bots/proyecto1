@@ -1,0 +1,26 @@
+#! /usr/bin/bash
+
+# Proyecto
+# GIAS
+
+# Buscar usuarios que tienen promedio de reviews menor al 10% por cada genero
+
+# Primero buscamos todos los géneros que existen dentro de los datos
+IFS=$'\n'
+#COntamos el numero total de usuarios
+N=$(psql -tA fdd2db_test -c "select count(distinct(user_id)) from ratings")
+#observaciones: puede que no haga falta el join 
+res=($(psql -tA fdd2db_test -c "select distinct genre from (select movie_id, unnest(genre_array) as genre from (select movie_id, user_id, title, regexp_split_to_array(genres, '\|') as genre_array from ratings left join movies on movie_id = id) as subq1) as sbq2"))
+
+#iteramos sobre el arreglo conseguido de generos
+# y buscamos los usuarios que pertenecen al 10% mas bajo de dicho genero (en tiempos promedios de ratings)
+# cada lista de usuarios se guarda en un arreglo aux que despues se concatena al arreglo de usuarios total
+for i in $(seq 0 $((${#res[@]} - 1)))
+do
+    echo ${res[$i]}
+    aux=($(psql -tA fdd2db_test -c "select user_id from(select user_id,NTILE(10)over(order by average) as percentile from(select user_id, avg(time_between_rates) as average from (select user_id,genre, movie_id, (date-previous_rate)::interval as time_between_rates from(select  genre, user_id, movie_id, row_number() over (partition by user_id order by date asc) row_num, date, lag(date) over (partition by user_id order by date asc) previous_rate from (select movie_id, '${res[$i]}' as genre, user_id,date from(select movie_id,user_id, title,date, regexp_split_to_array(genres, '\|') as genre_array from ratings left join movies on movie_id = id) as subq1 where ""'${res[$i]}'=ANY(genre_array)) as subq2) as subq3 where previous_rate is not null) as subq4 group by user_id) as subq5) as subq6 where percentile=1"))
+    users+=(${aux[@]})
+done
+# se hace un conteo del numero de veces repetido de un user_id y despues se vuelve a contar la repeticion de usuarios que aparecen 2, 3, ... n veces y se envia a un csv
+echo ${users[@]} | tr " " "\n" | sort | uniq -c | sort -k2nr | awk '{printf(" %s \n",$1)}' | sort | uniq -c | sort -k2nr | awk '{printf(" %s , \t %s \n",$2, $1)}' > distribucion_bots.csv
+echo $N
